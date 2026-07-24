@@ -365,16 +365,20 @@ export class Connector<
     const partsEngine = this.getInheritedProperty("partsEngine") as
       | PartsEngine
       | undefined
-    const fetchPartCircuitJson = partsEngine?.fetchPartCircuitJson
-    if (!fetchPartCircuitJson) {
+    if (!partsEngine) {
+      if (standard === "usb_c") {
+        this._addUsbCCanonicalFallbackPorts()
+      }
+      return
+    }
+    if (!partsEngine.fetchPartCircuitJson) {
       this._handleStandardConnectorCircuitJsonFailure(
         standard,
-        partsEngine
-          ? "partsEngine.fetchPartCircuitJson is not configured"
-          : "no partsEngine configured",
+        "partsEngine.fetchPartCircuitJson is not configured",
       )
       return
     }
+    const fetchPartCircuitJson = partsEngine.fetchPartCircuitJson
 
     this._hasStartedFootprintUrlLoad = true
 
