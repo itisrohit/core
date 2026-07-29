@@ -247,7 +247,8 @@ export class SolderJumper<
       pcb_component_id: this.pcb_component_id,
     })
     const pinLabelToPortId: Record<string, string> = {}
-    // Map pin labels ("1", "2", etc.) to pcb_port_id
+    const pinLabelToSourcePortId: Record<string, string> = {}
+    const portIdToCenter: Record<string, { x: number; y: number }> = {}
     for (let i = 0; i < pcb_ports.length; i++) {
       const port = pcb_ports[i]
       const sourcePort = db.source_port.get(port.source_port_id)
@@ -267,6 +268,12 @@ export class SolderJumper<
         }
       }
       pinLabelToPortId[pinLabel] = port.pcb_port_id
+      if (port.source_port_id) {
+        pinLabelToSourcePortId[pinLabel] = port.source_port_id
+      }
+      if (port.pcb_port_id) {
+        portIdToCenter[port.pcb_port_id] = { x: port.x, y: port.y }
+      }
     }
     const traces = db.pcb_trace.list({
       pcb_component_id: this.pcb_component_id,
@@ -280,10 +287,57 @@ export class SolderJumper<
     }
     for (const trace of traces) {
       if (!trace.route) continue
+      const bridgedPinNumbers: number[] = []
       for (const segment of trace.route) {
         if (segment.route_type !== "wire") continue
+        const pinFrom = segment.start_pcb_port_id?.match(/^\{PIN(\d+)\}$/)
+        const pinTo = segment.end_pcb_port_id?.match(/^\{PIN(\d+)\}$/)
+        if (pinFrom) bridgedPinNumbers.push(Number(pinFrom[1]))
+        if (pinTo) bridgedPinNumbers.push(Number(pinTo[1]))
         segment.start_pcb_port_id = updatePortId(segment.start_pcb_port_id)
         segment.end_pcb_port_id = updatePortId(segment.end_pcb_port_id)
+      }
+      // Create source_trace metadata for this bridge trace
+      if (bridgedPinNumbers.length >= 2) {
+        const connectedSourcePortIds = Array.from(
+          new Set(
+            bridgedPinNumbers
+              .map((n) => pinLabelToSourcePortId[String(n)])
+              .filter(Boolean),
+          ),
+        ) as string[]
+        if (connectedSourcePortIds.length >= 2) {
+          const subcircuit = this.getSubcircuit()
+          const st = db.source_trace.insert({
+            connected_source_port_ids: connectedSourcePortIds,
+            connected_source_net_ids: [],
+            subcircuit_id: subcircuit?.subcircuit_id ?? undefined,
+          })
+          trace.source_trace_id = st.source_trace_id
+        }
+      }
+      // Ensure trace endpoints are clearly inside their pads
+      const EPSILON = 1e-6
+      for (const segment of trace.route) {
+        if (segment.route_type !== "wire") continue
+        const startCenter = segment.start_pcb_port_id
+          ? portIdToCenter[segment.start_pcb_port_id]
+          : undefined
+        const endCenter = segment.end_pcb_port_id
+          ? portIdToCenter[segment.end_pcb_port_id]
+          : undefined
+        if (startCenter && typeof segment.x === "number") {
+          const dx = startCenter.x - segment.x
+          if (Math.abs(dx) < 1) {
+            segment.x += Math.sign(dx) * EPSILON
+          }
+        }
+        if (endCenter && typeof segment.x === "number") {
+          const dx = endCenter.x - segment.x
+          if (Math.abs(dx) < 1) {
+            segment.x += Math.sign(dx) * EPSILON
+          }
+        }
       }
     }
   }
